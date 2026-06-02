@@ -1,0 +1,12 @@
+# Ignore generated Excel audit files
+*.xlsx
+
+# Ignore Python byte cache files
+__pycache__/
+*.py[cod]
+*$*.py
+
+# Ignore virtual environments if you used one locally
+venv/
+.venv/
+env/
