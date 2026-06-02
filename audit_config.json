@@ -1,0 +1,36 @@
+{
+  "os_audit": {
+    "output_filename": "RHEL_Package_Audit_Report.xlsx",
+    "dnf_command": ["dnf", "repoquery", "--installed", "--cacheonly"],
+    "dnf_format": "%{name}|%{version}|%{release}|%{arch}|%{size}|%{repoid}|%{installtime}|%{vendor}|%{sourcerpm}",
+    "rpm_fallback_command": ["rpm", "-qa"],
+    "rpm_format": "%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}|%{SIZE}|@System|%{INSTALLTIME}|%{VENDOR}|%{SOURCERPM}\n"
+  },
+  "pip_audit": {
+    "fallback_commands": [
+      ["pip3", "list", "--format=freeze"],
+      ["python3", "-m", "pip", "list", "--format=freeze"]
+    ]
+  },
+  "git_deployment": {
+    "remote_url": "https://github.com/duluth-mn-open-source-developer/rhel_inventory.git",
+    "target_script": "rhel_package_audit.py",
+    "gitignore_filename": ".gitignore",
+    "commit_message": "feat: publish package and environment layout audit engine",
+    "target_branch": "main",
+    "gitignore_rules": [
+      "# Ignore generated Excel audit binaries",
+      "*.xlsx",
+      "",
+      "# Ignore Python runtime byte caches",
+      "__pycache__/",
+      "*.py[cod]",
+      "*$*.py",
+      "",
+      "# Ignore localization environments",
+      "venv/",
+      ".venv/",
+      "env/"
+    ]
+  }
+}

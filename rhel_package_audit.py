@@ -6,9 +6,8 @@ System Identifier : SYSTEM-PACKAGE-AUDIT-ENGINE
 Component Name    : rhel_package_audit.py
 Security Domain   : Security Administration & Inventory Assurance
 Description       : Programmatically interfaces with the RHEL native DNF/RPM 
-                    database and local Python pip ecosystems using secure 
-                    subprocess pipelines to extract package metadata. Generates
-                    an interactive, multi-tab XLSX audit log.
+                    database and local Python pip ecosystems using parameters
+                    provided by an external JSON configuration file.
 Target OS         : Red Hat Enterprise Linux 8.x / 9.x
 ================================================================================
 
@@ -27,91 +26,82 @@ Date        | Version | Author             | Description of Change
             |         |                    | (--cacheonly) to fix missing/empty 
             |         |                    | %{installtime} metadata strings.
 2026-06-02  | 2.2.0   | DevOps Engineer    | Added PIP package parsing pipeline.
-            |         |                    | Created Tab 3 ('PIP Packages Data')
-            |         |                    | and appended KPI card onto Dashboard.
 2026-06-02  | 2.3.0   | Python Architect   | Upgraded PIP parser to use standard
-            |         |                    | library importlib.metadata. Extracted
-            |         |                    | disk-creation dates and package summaries.
-2026-06-02  | 2.3.1   | Systems Engineer   | Fixed |%| typo in DNF string and added 
-            |         |                    | *extra catch-all to prevent unpacking
-            |         |                    | errors (ValueError).
+            |         |                    | library importlib.metadata.
+2026-06-02  | 2.3.1   | Systems Engineer   | Fixed |%| typo and added *extra logic.
+2026-06-02  | 3.0.0   | Core DevOps Eng    | Externalized script properties into 
+            |         |                    | an isolated audit_config.json block.
 ================================================================================
 
 ================================================================================
                              INSTRUCTIONS FOR USAGE
 ================================================================================
 1. PREREQUISITES:
-   - Ensure Python 3.6+ is active on the RHEL node.
+   - Ensure 'audit_config.json' is located in the execution directory.
    - Install openpyxl library: `pip3 install openpyxl` or `dnf install python3-openpyxl`
    - Execution requires root or sudo privileges to safely scan local DNF caching layers:
      `sudo python3 rhel_package_audit.py`
-
-2. INPUTS & ARGUMENTS:
-   - The script runs out-of-the-box against local system and environment package trees.
-   - To customize output filenames, pass a string to the generation function:
-     `build_rhel_audit_report("custom_output_name.xlsx")`
-
-3. EXPECTED OUTPUTS:
-   - Returns an Excel file (.xlsx) in the runtime execution directory.
-   - Tab 1 ('Dashboard Overview'): Centralized KPI metrics cards.
-   - Tab 2 ('Installed Packages Data'): DNF OS database file audit trail.
-   - Tab 3 ('PIP Packages Data'): Python Runtime virtual/global library trail.
 ================================================================================
 """
 
 import os
+import json
 import datetime
 import subprocess
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-# Modern Python standard library metadata parser (Python 3.8+)
 try:
     import importlib.metadata as metadata
 except ImportError:
-    import importlib_metadata as metadata  # Fallback for older Python 3.6/3.7 environments
+    import importlib_metadata as metadata
 
-def build_rhel_audit_report(output_filename="RHEL_Package_Audit_Report.xlsx"):
-    """
-    Queries both DNF/RPM and PIP subsystems via subprocess and metadata frameworks,
-    aggregates environment states, and compiles a beautifully formatted corporate workbook.
-    """
-    
+CONFIG_PATH = "audit_config.json"
+
+def load_system_config():
+    """Loads and returns configurations from the centralized workspace json map."""
+    if not os.path.exists(CONFIG_PATH):
+        raise FileNotFoundError(f"[CRITICAL] Configuration profile mapping '{CONFIG_PATH}' missing from root context.")
+    with open(CONFIG_PATH, "r") as f:
+        return json.load(f)
+
+def build_rhel_audit_report():
+    """Queries package systems via parameterized config schemas to compile an excel audit report."""
+    try:
+        cfg = load_system_config()
+    except Exception as e:
+        print(f"[FATAL] System configuration parser aborted: {e}")
+        return False
+
+    os_cfg = cfg["os_audit"]
+    output_filename = os_cfg.get("output_filename", "RHEL_Package_Audit_Report.xlsx")
+
     # --------------------------------------------------------------------------
     # 1. DATA PIPELINE ACQUISITION: OS PACKAGES
     # --------------------------------------------------------------------------
-    # FIXED: Cleared the accidental '|%|' duplicate character boundary typo
-    dnf_format = "%{name}|%{version}|%{release}|%{arch}|%{size}|%{repoid}|%{installtime}|%{vendor}|%{sourcerpm}"
     dnf_stdout = ""
+    dnf_cmd = os_cfg["dnf_command"] + [f"--queryformat={os_cfg['dnf_format']}"]
     
     try:
-        result_dnf = subprocess.run(
-            ["dnf", "repoquery", "--installed", "--cacheonly", f"--queryformat={dnf_format}"],
-            capture_output=True, text=True, check=True
-        )
+        result_dnf = subprocess.run(dnf_cmd, capture_output=True, text=True, check=True)
         dnf_stdout = result_dnf.stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("[WARNING] DNF local cache incomplete. Executing native RPM fallback pipeline...")
-        rpm_format = "%{NAME}|%{VERSION}|%{RELEASE}|%{ARCH}|%{SIZE}|@System|%{INSTALLTIME}|%{VENDOR}|%{SOURCERPM}\n"
+        rpm_cmd = os_cfg["rpm_fallback_command"] + [f"--queryformat={os_cfg['rpm_format']}"]
         try:
-            result_rpm = subprocess.run(
-                ["rpm", "-qa", f"--queryformat={rpm_format}"],
-                capture_output=True, text=True, check=True
-            )
+            result_rpm = subprocess.run(rpm_cmd, capture_output=True, text=True, check=True)
             dnf_stdout = result_rpm.stdout
         except Exception as e:
             print(f"[CRITICAL] OS pipeline failure: {e}")
             return False
 
     # --------------------------------------------------------------------------
-    # 2. DATA PIPELINE ACQUISITION: PYTHON PIP MODULES
+    # 2. DATA PIPELINE ACQUISITION: Python PIP MODULES
     # --------------------------------------------------------------------------
     pip_data_list = []
-    
     try:
         dists = sorted(metadata.distributions(), key=lambda d: d.metadata['Name'].lower())
-        
         for dist in dists:
             p_name = dist.metadata['Name']
             p_ver = dist.metadata['Version']
@@ -125,7 +115,6 @@ def build_rhel_audit_report(output_filename="RHEL_Package_Audit_Report.xlsx"):
                     p_date = datetime.datetime.fromtimestamp(stat_info.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
 
             pip_data_list.append([p_name, p_ver, p_date, p_desc])
-            
     except Exception as e:
         print(f"[WARNING] PIP context mapping encountered issues: {e}")
 
@@ -144,10 +133,7 @@ def build_rhel_audit_report(output_filename="RHEL_Package_Audit_Report.xlsx"):
     ws_pip = wb.create_sheet(title="PIP Packages Data")
     ws_pip.views.sheetView[0].showGridLines = True
 
-    # Color Palette Definitions (Tech Steel Blue Architecture)
-    DARK_BLUE = "1B365D"
-    WHITE = "FFFFFF"
-    
+    DARK_BLUE, WHITE = "1B365D", "FFFFFF"
     font_title = Font(name="Segoe UI", size=18, bold=True, color=DARK_BLUE)
     font_subtitle = Font(name="Segoe UI", size=11, italic=True, color="555555")
     font_header = Font(name="Segoe UI", size=11, bold=True, color=WHITE)
@@ -179,7 +165,6 @@ def build_rhel_audit_report(output_filename="RHEL_Package_Audit_Report.xlsx"):
         if len(parts) < 9:
             continue
         
-        # FIXED: Added `*extra` catch-all parameter to cleanly handle any multi-pipe parsing errors
         name, version, release, arch, raw_size, repo, raw_time, vendor, source, *extra = parts
         size_mb = round(int(raw_size) / (1024 * 1024), 2) if raw_size.isdigit() else 0.0
         
@@ -207,7 +192,6 @@ def build_rhel_audit_report(output_filename="RHEL_Package_Audit_Report.xlsx"):
                 cell.alignment = Alignment(horizontal="left")
         dnf_idx += 1
 
-    # DNF Total Footprint Summary Row
     ws_dnf.cell(row=dnf_idx, column=1, value="Total Installed Packages Size").font = font_bold_data
     ws_dnf.cell(row=dnf_idx, column=1).border = border_total
     total_size_cell = ws_dnf.cell(row=dnf_idx, column=5, value=f"=SUM(E2:E{dnf_idx-1})")
@@ -235,11 +219,8 @@ def build_rhel_audit_report(output_filename="RHEL_Package_Audit_Report.xlsx"):
                 cell = ws_pip.cell(row=pip_idx, column=col_idx, value=val)
                 cell.font = font_data; cell.border = border_thin
                 if pip_idx % 2 == 0: cell.fill = fill_zebra
-                
-                if col_idx in [2, 3]: 
-                    cell.alignment = Alignment(horizontal="center")
-                else:
-                    cell.alignment = Alignment(horizontal="left")
+                if col_idx in [2, 3]: cell.alignment = Alignment(horizontal="center")
+                else: cell.alignment = Alignment(horizontal="left")
             pip_idx += 1
     else:
         ws_pip.cell(row=2, column=1, value="No PIP data found or dependencies unindexed.").font = font_data
@@ -253,44 +234,34 @@ def build_rhel_audit_report(output_filename="RHEL_Package_Audit_Report.xlsx"):
     ws_dash.cell(row=2, column=2, value="RHEL Package Infrastructure Audit Report").font = font_title
     ws_dash.cell(row=3, column=2, value="Automated system landscape generation using Python & DNF").font = font_subtitle
     
-    # KPI Card 1: DNF Count
     ws_dash.merge_cells("B5:C5"); ws_dash.cell(row=5, column=2, value="OS Audited Packages").font = font_header; ws_dash.cell(row=5, column=2).fill = fill_header
     ws_dash.merge_cells("B6:C7"); c_cell = ws_dash.cell(row=6, column=2, value=f"=COUNTA('Installed Packages Data'!A2:A{dnf_idx-1})")
     c_cell.font = Font(name="Segoe UI", size=20, bold=True, color=DARK_BLUE); c_cell.alignment = Alignment(horizontal="center", vertical="center"); c_cell.fill = fill_accent
     
-    # KPI Card 2: Disk Footprint
     ws_dash.merge_cells("E5:F5"); ws_dash.cell(row=5, column=5, value="Total Disk Footprint").font = font_header; ws_dash.cell(row=5, column=5).fill = fill_header
     ws_dash.merge_cells("E6:F7"); f_cell = ws_dash.cell(row=6, column=5, value=f"='Installed Packages Data'!E{dnf_idx}")
     f_cell.font = Font(name="Segoe UI", size=20, bold=True, color=DARK_BLUE); f_cell.alignment = Alignment(horizontal="center", vertical="center"); f_cell.fill = fill_accent
 
-    # KPI Card 3: PIP Count
     ws_dash.merge_cells("H5:I5"); ws_dash.cell(row=5, column=8, value="PIP Audited Packages").font = font_header; ws_dash.cell(row=5, column=8).fill = fill_header
     ws_dash.merge_cells("H6:I7"); p_cell = ws_dash.cell(row=6, column=8, value=f"=COUNTA('PIP Packages Data'!A2:A{max(2, pip_idx-1)})")
     p_cell.font = Font(name="Segoe UI", size=20, bold=True, color=DARK_BLUE); p_cell.alignment = Alignment(horizontal="center", vertical="center"); p_cell.fill = fill_accent
 
-    # Outer framing for metrics cards
     for r in range(5, 8):
-        for c in [2, 3, 5, 6, 8, 9]:
-            ws_dash.cell(row=r, column=c).border = border_thin
+        for c in [2, 3, 5, 6, 8, 9]: ws_dash.cell(row=r, column=c).border = border_thin
 
     # --------------------------------------------------------------------------
     # 7. AUTO-FIT CELL DIMENSIONS
     # --------------------------------------------------------------------------
     for sheet in wb.worksheets:
         for col in sheet.columns:
-            if sheet.title == "Dashboard Overview" and col[0].column > 9: 
-                continue
-            
+            if sheet.title == "Dashboard Overview" and col[0].column > 9: continue
             col_letter = get_column_letter(col[0].column)
             max_len = max(len(str(cell.value or '')) for cell in col)
-            
-            # Give descriptions column extra width breathing room up to 60 chars maximum
             if sheet.title == "PIP Packages Data" and col_letter == 'D':
                 sheet.column_dimensions[col_letter].width = min(max(max_len + 4, 15), 60)
             else:
                 sheet.column_dimensions[col_letter].width = max(max_len + 4, 12)
 
-    # File Commit
     wb.save(output_filename)
     print(f"[SUCCESS] Multi-Tab Corporate Audit Report Generated: {output_filename}")
     return True
